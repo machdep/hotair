@@ -1,0 +1,6 @@
+[submodule "mdepx"]
+	path = mdepx
+	url = https://github.com/machdep/mdepx
+[submodule "k-thermocouple-lib"]
+	path = k-thermocouple-lib
+	url = https://github.com/Miceuz/k-thermocouple-lib
