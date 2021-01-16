@@ -217,7 +217,6 @@ hotair_init(struct pic32_port_softc *sc)
 	uint8_t cfg;
 	int error;
 
-	printf("Hello world\n");
 	pic32_port_ansel(sc, PORT_B, 12, 1);
 	pic32_port_ansel(sc, PORT_B, 13, 1);
 	pic32_port_ansel(sc, PORT_B, 14, 0);
@@ -269,7 +268,6 @@ hotair_main(struct pic32_port_softc *sc)
 	enable_count = 0;
 
 	while (1) {
-		//printf("char %d\n", pic32_getc(&uart_sc));
 		val = pic32_adc_convert(&adc_sc, 10);
 		if (val < 50) {
 			if (enable_count >= 0) {
@@ -382,6 +380,8 @@ board_init(void)
 int
 main(void)
 {
+
+	printf("Hello world\n");
 
 	hotair_init(&port_sc);
 	hotair_main(&port_sc);
