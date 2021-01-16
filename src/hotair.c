@@ -255,16 +255,14 @@ i2c_write_config(struct pic32_port_softc *sc, uint8_t cfg)
 }
 
 int
-get_mv_single(struct pic32_port_softc *sc)
+get_mv_single(struct pic32_port_softc *sc, uint16_t *result)
 {
 	int b0, b1, b2, b3;
-	int ret;
-	int mv;
+	uint16_t mv;
+	int error;
 
-	mv = -1;
-
-	ret = i2c_write_byte(sc, 0xd0 | 1, 1, 0);
-	if (ret == 0) {
+	error = i2c_write_byte(sc, 0xd0 | 1, 1, 0);
+	if (error == 0) {
 		b2 = i2c_read_byte(sc, 1, 0);
 		b1 = i2c_read_byte(sc, 1, 0);
 		b0 = i2c_read_byte(sc, 1, 1);
@@ -272,9 +270,10 @@ get_mv_single(struct pic32_port_softc *sc)
 
 		mv = (b2 & 0xff) << 8;
 		mv |= (b1 & 0xff);
+		*result = mv;
 	}
 
-	return (mv);
+	return (error);
 }
 
 static int
@@ -319,7 +318,7 @@ hotair_main(void)
 			printf("cfg wrotten\n");
 	}
 
-	uint32_t mv;
+	uint16_t mv;
 	uint32_t celsius;
 
 	//pic32_port_tris(&port_sc, PORT_B, 15, PORT_INPUT);
@@ -378,6 +377,8 @@ hotair_main(void)
 
 	int mv_zero_count;
 	int enable_count;
+	int error;
+
 	mv_zero_count = 0;
 	enable_count = 0;
 
@@ -387,17 +388,16 @@ hotair_main(void)
 	while (1) {
 		//printf("char %d\n", pic32_getc(&uart_sc));
 		val = pic32_adc_convert(&adc_sc, 10);
-		if (val <= 10) {
+		if (val < 50) {
 			if (enable_count >= 0) {
 				if (enable) {
-					if (enable_count++ > 5) {
-						enable = 0;
-						enable_count = -5;
-					}
+					/* Quick turn off. */
+					enable = 0;
 				} else {
-					if (enable_count++ > 10) {
+					/* Slow enable. */
+					if (enable_count++ > 3) {
 						enable = 1;
-						enable_count = -5;
+						enable_count = -3;
 					}
 				}
 			}
@@ -411,9 +411,14 @@ hotair_main(void)
 
 		udelay(40000);
 
-		mv = get_mv_single(sc);
-		if (mv == -1)
+		error = get_mv_single(sc, &mv);
+		if (error != 0)
 			continue;
+		if (mv > 8000) {
+			/* Read error ? */
+			printf("Error reading, val %d\n", mv);
+			continue;
+		}
 
 		vr1 = pic32_adc_convert(&adc_sc, 4); /* heat */
 		vr1 = (4095 - vr1) / 204;
@@ -438,7 +443,7 @@ hotair_main(void)
 				pic32_gate(&port_sc, 1);
 			else
 				pic32_gate(&port_sc, 0);
-		} else if (mv == 0 || mv == 1) {
+		} else if (mv >= 0 && mv <= 2) {
 			pic32_led_w(&port_sc, 0);
 			pic32_led_b(&port_sc, 0);
 			pic32_gate(&port_sc, 0);
