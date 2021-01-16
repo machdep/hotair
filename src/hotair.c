@@ -29,6 +29,8 @@
 #include <sys/console.h>
 #include <sys/thread.h>
 
+#include <dev/i2c/bitbang/i2c_bitbang.h>
+
 #include <mips/microchip/pic32.h>
 #include <mips/microchip/pic32mm.h>
 
@@ -42,10 +44,11 @@ PIC32MM_DEVCFG;
 /* Software contexts */
 static struct pic32_uart_softc uart_sc;
 static struct pic32_port_softc port_sc;
-static struct pic32_pps_softc pps_sc;
 static struct pic32_ccp_softc ccp_sc;
 static struct pic32_adc_softc adc_sc;
 static struct pic32_cdac_softc cdac_sc;
+static struct i2c_bitbang_softc i2c_bitbang_sc;
+static struct mdx_device dev_bitbang = { .sc = &i2c_bitbang_sc };
 
 #define	C0_COMPARE	11
 #define	C0_COUNT	9
@@ -110,10 +113,12 @@ hotair_ports_init(struct pic32_port_softc *sc)
 	pic32_port_tris(&port_sc, PORT_C, 9, PORT_OUTPUT);
 }
 
-
 static void
-i2c_sda(struct pic32_port_softc *sc, uint8_t enable)
+i2c_sda(void *arg, bool enable)
 {
+	struct pic32_port_softc *sc;
+
+	sc = &port_sc;
 
 	if (enable)
 		pic32_port_tris(sc, PORT_B, 12, PORT_INPUT);
@@ -122,8 +127,11 @@ i2c_sda(struct pic32_port_softc *sc, uint8_t enable)
 }
 
 static void
-i2c_scl(struct pic32_port_softc *sc, uint8_t enable)
+i2c_scl(void *arg, bool enable)
 {
+	struct pic32_port_softc *sc;
+
+	sc = &port_sc;
 
 	if (enable)
 		pic32_port_tris(sc, PORT_B, 13, PORT_INPUT);
@@ -131,143 +139,83 @@ i2c_scl(struct pic32_port_softc *sc, uint8_t enable)
 		pic32_port_tris(sc, PORT_B, 13, PORT_OUTPUT);
 }
 
-static void
-i2c_start_condition(struct pic32_port_softc *sc)
+static int
+i2c_sda_val(void *arg)
 {
+	struct pic32_port_softc *sc;
 
-	i2c_scl(sc, 1);
-	i2c_sda(sc, 1);
-	udelay(5);
-	i2c_sda(sc, 0);
-	udelay(5);
-	i2c_scl(sc, 0);
-	udelay(5);
-}
-
-static void
-i2c_stop_condition(struct pic32_port_softc *sc)
-{
-
-	i2c_sda(sc, 0);
-	udelay(5);
-	i2c_scl(sc, 1);
-	udelay(5);
-	i2c_sda(sc, 1);
-	udelay(5);
-}
-
-static void
-i2c_write_bit(struct pic32_port_softc *sc, uint8_t b)
-{
-
-	if (b > 0)
-		i2c_sda(sc, 1);
-	else
-		i2c_sda(sc, 0);
-
-	udelay(5);
-	i2c_scl(sc, 1);
-	udelay(5);
-	i2c_scl(sc, 0);
-}
-
-static uint8_t
-i2c_read_bit(struct pic32_port_softc *sc)
-{
-	uint8_t b;
-
-	i2c_sda(sc, 1);
-	udelay(5);
-	i2c_scl(sc, 1);
-	udelay(5);
+	sc = &port_sc;
 
 	if (pic32_port_port(sc, PORT_B, 12))
-		b = 1;
-	else
-		b = 0;
+		return (1);
 
-	i2c_scl(sc, 0);
- 
-	return (b);
+	return (0);
 }
 
 static int
-i2c_write_byte(struct pic32_port_softc *sc,
-    uint8_t b, int start, int stop)
+mcp3421_configure(uint8_t slave)
 {
-	uint8_t ack;
-	uint8_t i;
+	struct i2c_msg msgs[1];
+	uint8_t cfg;
+	int ret;
 
-	ack = 0;
-
-	if (start)
-		i2c_start_condition(sc);
-
-	for (i = 0; i < 8; i++) {
-		i2c_write_bit(sc, (b & 0x80));// write the most-significant bit
-		b <<= 1;
-	}
- 
-	ack = i2c_read_bit(sc);
-
-	if (stop)
-		i2c_stop_condition(sc);
-
-	return (ack);
-}
-
-static uint8_t
-i2c_read_byte(struct pic32_port_softc *sc,
-    int ack, int stop)
-{
-	uint8_t b;
-	uint8_t i;
-
-	b = 0;
-
-	for (i = 0; i < 8; i++) {
-		b <<= 1;
-		b |= i2c_read_bit(sc);
+	/* Configure the MCP3421. */
+	cfg = 0x10 | (0 << 2);
+	msgs[0].slave = slave;
+	msgs[0].buf = &cfg;
+	msgs[0].len = 1;
+	msgs[0].flags =	0;
+	ret = mdx_i2c_transfer(&dev_bitbang, msgs, 1);
+	if (ret != 0) {
+		printf("%s: could not configure mcp3421, slave %x\n",
+		    __func__, slave);
+		return (ret);
 	}
 
-	if (ack)
-		i2c_write_bit(sc, 0);
-	else
-		i2c_write_bit(sc, 1);
+	printf("cfg written\n");
 
-	if (stop)
-		i2c_stop_condition(sc);
-
-	return (b);
+	return (0);
 }
 
-int
-get_mv_single(struct pic32_port_softc *sc, uint16_t *result)
+static int
+get_mv(struct pic32_port_softc *sc, uint8_t unit, uint16_t *result)
 {
-	int b0, b1, b2, b3;
+	struct i2c_msg msgs[1];
+	uint8_t data[3];
+	int b0, b1, b2;
 	uint16_t mv;
-	int error;
+	int ret;
 
-	error = i2c_write_byte(sc, 0xd0 | 1, 1, 0);
-	if (error == 0) {
-		b2 = i2c_read_byte(sc, 1, 0);
-		b1 = i2c_read_byte(sc, 1, 0);
-		b0 = i2c_read_byte(sc, 1, 1);
-		//printf("%s: read %02x %02x %02x\n", __func__, b2, b1, b0);
+	if (unit == 0)
+		msgs[0].slave = 0x68;
+	else
+		msgs[0].slave = 0x69;
 
-		mv = (b2 & 0xff) << 8;
-		mv |= (b1 & 0xff);
+	msgs[0].buf = data;
+	msgs[0].len = 3;
+	msgs[0].flags = IIC_M_RD;
+
+	ret = mdx_i2c_transfer(&dev_bitbang, msgs, 1);
+
+	if (ret == 0) {
+		b2 = data[0];
+		b1 = data[1];
+		b0 = data[2];
+
+		//printf("%s(%d): read %d %d %02x\n", __func__,
+		//    unit, b2, b1, b0);
+		mv = b2 << 8 | b1;
 		*result = mv;
 	}
 
-	return (error);
+	return (ret);
 }
 
 static void
 hotair_init(struct pic32_port_softc *sc)
 {
 	uint8_t cfg;
-	int ret;
+	int error;
 
 	printf("Hello world\n");
 	pic32_port_ansel(sc, PORT_B, 12, 1);
@@ -277,13 +225,9 @@ hotair_init(struct pic32_port_softc *sc)
 
 	pic32_cdac_init(&cdac_sc, CDAC1_BASE);
 
-	ret = i2c_write_byte(sc, 0xd0, 1, 0);
-	if (ret == 0) {
-		cfg = 0x10 | (0 << 2);
-		ret = i2c_write_byte(sc, cfg, 0, 1);
-		if (ret == 0)
-			printf("cfg wrotten\n");
-	}
+	error = mcp3421_configure(0x68);
+	if (error != 0)
+		panic("could not configure a0");
 
 	pic32_port_ansel(sc, PORT_A, 3, 0);
 	pic32_port_tris(sc, PORT_A, 3, PORT_INPUT);
@@ -350,7 +294,7 @@ hotair_main(struct pic32_port_softc *sc)
 
 		udelay(40000);
 
-		error = get_mv_single(sc, &mv);
+		error = get_mv(sc, 0, &mv);
 		if (error != 0)
 			continue;
 		if (mv > 8000) {
@@ -400,6 +344,12 @@ hotair_main(struct pic32_port_softc *sc)
 	}
 }
 
+static struct i2c_bitbang_ops i2c_ops = {
+	.i2c_scl = &i2c_scl,
+	.i2c_sda = &i2c_sda,
+	.i2c_sda_val = &i2c_sda_val,
+};
+
 void
 board_init(void)
 {
@@ -409,8 +359,6 @@ board_init(void)
 	mtc0(C0_COUNT, 0, 0);
 	mtc0(C0_COMPARE, 0, -1);
 	mtc0(12, 0, 1);
-
-	pic32_pps_init(&pps_sc, PPS_BASE);
 
 	pic32_port_init(&port_sc, PORTS_BASE);
 	hotair_ports_init(&port_sc);
@@ -428,6 +376,7 @@ board_init(void)
 	mdx_console_register(uart_putchar, (void *)&uart_sc);
 
 	pic32_ccp_init(&ccp_sc, CCP1_BASE, 122000);
+	i2c_bitbang_init(&dev_bitbang, &i2c_ops);
 }
 
 int
