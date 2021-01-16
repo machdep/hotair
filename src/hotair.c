@@ -47,8 +47,8 @@ static struct pic32_ccp_softc ccp_sc;
 static struct pic32_adc_softc adc_sc;
 static struct pic32_cdac_softc cdac_sc;
 
-// RB12 SDA
-// RB13 SCL
+#define	C0_COMPARE	11
+#define	C0_COUNT	9
 
 void
 udelay(uint32_t usec)
@@ -69,9 +69,6 @@ uart_putchar(int c, void *arg)
 
 	pic32_putc(sc, c);
 }
-
-#define C0_COMPARE      11 
-#define C0_COUNT            9 
 
 void
 pic32_led_b(struct pic32_port_softc *sc, uint8_t enable)
@@ -98,7 +95,6 @@ pic32_gate(struct pic32_port_softc *sc, uint8_t enable)
 {
 	uint32_t reg;
 
-	//printf("%s: %d\n", __func__, enable);
 	/* Relay */
 	pic32_port_ansel(sc, PORT_B, 9, 1);
 	pic32_port_tris(sc, PORT_B, 9, PORT_OUTPUT);
@@ -106,17 +102,14 @@ pic32_gate(struct pic32_port_softc *sc, uint8_t enable)
 }
 
 void
-solder_ports_init(struct pic32_port_softc *sc)
+hotair_ports_init(struct pic32_port_softc *sc)
 {
-
-	/* UART1 digital */
-	//pic32_port_ansel(&port_sc, PORT_B, 14, 1);
-	//pic32_port_ansel(&port_sc, PORT_B, 15, 1);
 
 	/* LED light */
 	pic32_port_lat(&port_sc, PORT_C, 9, 0);
 	pic32_port_tris(&port_sc, PORT_C, 9, PORT_OUTPUT);
 }
+
 
 static void
 i2c_sda(struct pic32_port_softc *sc, uint8_t enable)
@@ -248,12 +241,6 @@ i2c_read_byte(struct pic32_port_softc *sc,
 	return (b);
 }
 
-static void
-i2c_write_config(struct pic32_port_softc *sc, uint8_t cfg)
-{
-
-}
-
 int
 get_mv_single(struct pic32_port_softc *sc, uint16_t *result)
 {
@@ -276,35 +263,15 @@ get_mv_single(struct pic32_port_softc *sc, uint16_t *result)
 	return (error);
 }
 
-static int
-hotair_main(void)
+static void
+hotair_init(struct pic32_port_softc *sc)
 {
-	struct pic32_port_softc *sc;
-	int vr1, vr2;
 	uint8_t cfg;
 	int ret;
-
-	sc = &port_sc;
 
 	printf("Hello world\n");
 	pic32_port_ansel(sc, PORT_B, 12, 1);
 	pic32_port_ansel(sc, PORT_B, 13, 1);
-
-	//pic32_port_tris(sc, PORT_B, 12, PORT_OUTPUT);
-	//pic32_port_tris(sc, PORT_B, 13, PORT_OUTPUT);
-	//pic32_port_tris(sc, PORT_B, 12, PORT_INPUT);
-	//pic32_port_tris(sc, PORT_B, 13, PORT_INPUT);
-
-	//port input drives 1
-	//port output drives 0
-
-#if 0
-	pic32_port_ansel(sc, PORT_A, 0, 0);
-	pic32_port_tris(sc, PORT_A, 0, PORT_INPUT);
-	pic32_port_ansel(sc, PORT_A, 1, 0);
-	pic32_port_tris(sc, PORT_A, 1, PORT_INPUT);
-#endif
-
 	pic32_port_ansel(sc, PORT_B, 14, 0);
 	pic32_port_tris(sc, PORT_B, 14, PORT_OUTPUT);
 
@@ -317,26 +284,6 @@ hotair_main(void)
 		if (ret == 0)
 			printf("cfg wrotten\n");
 	}
-
-	uint16_t mv;
-	uint32_t celsius;
-
-	//pic32_port_tris(&port_sc, PORT_B, 15, PORT_INPUT);
-	//pic32_port_tris(&port_sc, PORT_B, 15, PORT_OUTPUT);
-	//pic32_port_lat(&port_sc, PORT_B, 15, 1);
-	//pic32_port_cnpu(&port_sc, PORT_B, 15, 1);
-	//pic32_port_cnpd(&port_sc, PORT_B, 15, 1);
-	//pic32_port_odc(&port_sc, PORT_B, 15, 0);
-
-#if 0
-	pic32_port_ansel(sc, PORT_A, 0, 0);
-	pic32_port_tris(sc, PORT_A, 0, PORT_INPUT);
-	//pic32_port_tris(sc, PORT_A, 0, PORT_OUTPUT);
-
-	pic32_port_ansel(sc, PORT_A, 1, 0);
-	pic32_port_tris(sc, PORT_A, 1, PORT_INPUT);
-	//pic32_port_tris(sc, PORT_A, 1, PORT_OUTPUT);
-#endif
 
 	pic32_port_ansel(sc, PORT_A, 3, 0);
 	pic32_port_tris(sc, PORT_A, 3, PORT_INPUT);
@@ -359,31 +306,23 @@ hotair_main(void)
 	pic32_port_tris(sc, PORT_B, 3, PORT_OUTPUT);
 
 	pic32_adc_init(&adc_sc, ADC1_BASE);
+}
 
+static int
+hotair_main(struct pic32_port_softc *sc)
+{
+	uint32_t celsius;
 	uint32_t val;
-	uint32_t val_prev;
-	int enable;
-
-	enable = 0;
-
-#if 0
-	pic32_cdac_control(&cdac_sc, 102);
-	pic32_gate(&port_sc, 1);
-	pic32_led_w(&port_sc, 1);
-	pic32_led_b(&port_sc, 1);
-	while (1)
-		printf("test\n");
-#endif
-
+	uint16_t mv;
 	int mv_zero_count;
 	int enable_count;
+	int vr1, vr2;
+	int enable;
 	int error;
 
+	enable = 0;
 	mv_zero_count = 0;
 	enable_count = 0;
-
-	//pic32_port_ansel(sc, PORT_A, 1, 0);
-	//pic32_port_tris(sc, PORT_A, 1, PORT_INPUT);
 
 	while (1) {
 		//printf("char %d\n", pic32_getc(&uart_sc));
@@ -474,13 +413,13 @@ board_init(void)
 	pic32_pps_init(&pps_sc, PPS_BASE);
 
 	pic32_port_init(&port_sc, PORTS_BASE);
-	solder_ports_init(&port_sc);
+	hotair_ports_init(&port_sc);
 
-	//TX
+	/* UART TX */
 	pic32_port_ansel(&port_sc, PORT_A, 0, 1);
 	*(volatile uint32_t *)0xBF802590 = (1 << 0); //rp1 TX
 
-	//RX
+	/* UART RX */
 	pic32_port_ansel(&port_sc, PORT_A, 1, 1);
 	pic32_port_tris(&port_sc, PORT_A, 1, PORT_INPUT);
 	*(volatile uint32_t *)0xBF802520 = (2 << 16); //rpinr9 RX RP2
@@ -495,7 +434,8 @@ int
 main(void)
 {
 
-	hotair_main();
+	hotair_init(&port_sc);
+	hotair_main(&port_sc);
 
 	/* NOT REACHED */
 
